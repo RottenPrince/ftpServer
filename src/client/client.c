@@ -109,7 +109,7 @@ int main() {
 
   // server-client interaction
   int send_result;
-  while (strcmp(msg, "quit") != 0) {
+  while (1) {
     printf(">");
     fgets(msg, sizeof(msg), stdin);
     if (strcmp(msg, "quit")) {
@@ -117,30 +117,26 @@ int main() {
       if (send_result == -1) {
         perror("send");
       }
-      printf("Job's done!");
-      memset(msg, 0, sizeof(msg));
+      break;
     } else if (strcmp(msg, "@dir")) {
       send_result = send(sockfd, msg, MAXDATASIZE - 1, 0);
       if (send_result == -1) {
         perror("send");
       }
-
-      // receive a list of filenames in @dir directory
       numbytes = recv(sockfd, msg, sizeof(msg) - 1, 0);
       if (numbytes == -1) {
         perror("recv");
         exit(1);
       }
+      for (int i = 0; i < BUFFERSIZE; ++i) {
+        printf("%s", msg + 1);
+      }
       memset(msg, 0, sizeof(msg));
-    }
-
-    else if (strcmp(msg,
-                    "@get:")) { // need to pattern match e.g. @get first.txt
+    } else if (strcmp(msg, "@get:")) {
       send_result = send(sockfd, msg, MAXDATASIZE - 1, 0);
       if (send_result == -1) {
         perror("send");
       }
-
       numbytes = recv(sockfd, msg, sizeof(msg) - 1, 0);
       if (numbytes == -1) {
         perror("recv");
@@ -156,6 +152,7 @@ int main() {
         fwrite(buffer, 1, numbytes, filename);
       }
       memset(msg, 0, sizeof(msg));
+
     } else if (strcmp(msg, "?") || strcmp(msg, "help")) {
       printf("\n\t@dir\n\t@get\n\tquit");
       memset(msg, 0, sizeof(msg));
@@ -163,16 +160,6 @@ int main() {
       printf("Invalid command\n\n");
       memset(msg, 0, sizeof(msg));
     }
-  }
-
-  // Receive the the content of a file from the server
-  // and puts them into the newly created file in client with
-  // the same name
-  // end result should be
-  numbytes = recv(sockfd, buf, MAXDATASIZE - 1, 0); // Receive data from server
-  if (numbytes == -1) {
-    perror("recv"); // Print error message if receiving data fails
-    exit(1);        // Exit program with error code
   }
 
   buf[numbytes] = '\0';                   // Null-terminate the received data

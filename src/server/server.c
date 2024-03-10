@@ -2,16 +2,17 @@
 #include <dirent.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <unistd.h>
 
-#define PORT "20000" // the port users will be connecting to
-#define BACKLOG 10   // how many pending connections queue will hold
+#define PORT "20000"    // the port users will be connecting to
+#define BUFFERSIZE 1024 // max biffer size ofr sending file contents
+#define BACKLOG 10      // how many pending connections queue will hold
 #define MSG_SIZE                                                               \
   100 // max size of the message, 100 because the client can only recieve 100
       // bytes of data
@@ -84,7 +85,6 @@ int main() {
       perror("server: bind"); // Print error message
       continue;               // Continue to the next result
     }
-
     break; // Break the loop if binding is successful
   }
 
@@ -123,29 +123,38 @@ int main() {
 
   close(sockfd); // Done listening for new connections
                  // message exchange
-  char msg[MSG_SIZE];
 
-  // Receive message from the client
-  int receive_result = recv(new_fd, msg, sizeof(msg) - 1, 0);
-  if (receive_result == -1) {
+  char msg[BUFFERSIZE];
+  char *verification = malloc(14 * sizeof(char));
+  int verification_result = recv(sockfd, verification, sizeof(msg), 0);
+  if (verification_result == -1) {
     perror("recv");
     exit(1);
   }
-  // In here there should be a validator of inputs from users
-  //
+  verification_result = send(sockfd, verification, sizeof(msg), 0);
+  if (verification_result == -1) {
+    perror("send");
+    exit(1);
+  }
 
-  msg[receive_result] = '\0';             // Null-terminate the received data
-  printf("Server received: '%s'\n", msg); // Print the received message
+  char buffer[BUFFERSIZE];
+  while (1) {
+    int receive_result = recv(sockfd, buffer, BUFFERSIZE - 1, 0);
+    if (receive_result == -1) {
+      perror("recv");
+      exit(1);
+    }
 
-  // Send the received message back to the client
-  int send_result =
-      send(new_fd, msg, strlen(msg), 0); // Send the message back to client
-  if (send_result == -1) {
-    perror("send"); // Print error message if sending data fails
+    if (strcmp(buffer, "quit")) {
+      break;
+    } else if (strcmp(buffer, "@dir")) {
+      memset(msg, 0, sizeof(msg));
+
+    } else if (strcmp(buffer, "@get")) {
+    }
   }
 
   close(new_fd); // Done sending message, close connection to client return 0;
-                 // // Exit program with success code
 }
 
 // get sockaddr, IPv4 or IPv6:
@@ -154,4 +163,19 @@ void *get_in_addr(struct sockaddr *sa) {
     return &(((struct sockaddr_in *)sa)->sin_addr); // Return IPv4 address
   }
   return &(((struct sockaddr_in6 *)sa)->sin6_addr); // Return IPv6 address
+}
+
+bool find_file(char *name) {
+  DIR *dirp = opendir("./@dir/"); // directory pointer
+  bool FOUND = true, NOT_FOUND = false;
+  struct dirent *dp = readdir(dirp);
+
+  while (dp != NULL) {
+    if (strcmp(name, dp->d_name) == 0) {
+      closedir(dirp);
+      return FOUND;
+    }
+  }
+
+  return NOT_FOUND;
 }
