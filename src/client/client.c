@@ -8,169 +8,111 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define PORT "20000"    // the port client will be connecting to
-#define MAXDATASIZE 100 // max number of bytes we can get at once
-#define BUFFERSIZE 1024 // max biffer size ofr sending file contents
+#define PORT "20000"    // The port client will be connecting to 
+#define MAXDATASIZE 100 // Max number of bytes we can get at once 
+#define BUFFERSIZE 1024 // Max buffer size for sending file contents 
+#define MAX_FILES 20    // Max number of files 
+#define IPv6 "::1"      // Server address 
 
-// client requirements:
-// 	client connects to a server
-// 	commands:
-// 		@dir would display files that are eligible for downdloading
-// 		@get would let download file for the client
-
-// get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa);
 
 int main() {
-  int sockfd,
-      numbytes; // sockfd = socket file descriptor, numbytes = number of bytes
-  char buf[MAXDATASIZE];
-  struct addrinfo hints, *servinfo, *p;
-  int rv;
-  char s[INET6_ADDRSTRLEN];
-  char ipaddr[INET6_ADDRSTRLEN];
-  int no = 0;
-
-  printf("Enter IP address (v4, v6): ");
-  fgets(ipaddr, sizeof(ipaddr), stdin);
-  ipaddr[strcspn(ipaddr, "\n")] = 0; // remove newline character
-
-  memset(&hints, 0, sizeof hints); // Initialize hints struct to zero
-  hints.ai_family = AF_UNSPEC;     // Specify that the address family is
-                               // unspecified, which allows both IPv4 and IPv6
-  hints.ai_socktype = SOCK_STREAM; // Specify socket type as stream (TCP)
-
-  rv = getaddrinfo(ipaddr, PORT, &hints,
-                   &servinfo); // Retrieve address information for localhost and
-                               // specified port
-
-  if (rv != 0) {
-    fprintf(stderr, "getaddrinfo: %s\n",
-            gai_strerror(rv)); // Print error if getaddrinfo fails
-    return 1;
-  }
-
-  printf("getaddrinfo is successful: %d\n\n", rv); // Print success message
-
-  // loop through all the results and connect to the first we can
-  for (p = servinfo; p != NULL; p = p->ai_next) {
-    printf("1");
-    sockfd =
-        socket(p->ai_family, p->ai_socktype, p->ai_protocol); // Create a socket
-    if (sockfd == -1) {         // Check if socket creation failed
-      perror("client: socket"); // Print error message
-      continue;                 // Continue to the next result
+    int sockfd;
+    struct addrinfo hints, *servinfo, *p;
+    int rv;
+    char s[INET6_ADDRSTRLEN];
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC; // Allow for any IP version 
+    hints.ai_socktype = SOCK_STREAM; // TCP stream sockets 
+    rv = getaddrinfo(IPv6, PORT, &hints, &servinfo);
+    if (rv != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        return 1;
+    }
+    // Loop through all the results and connect to the first we can 
+    for (p = servinfo; p != NULL; p = p->ai_next) {
+        sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (sockfd == -1) {
+            perror("client: socket");
+            continue;
+        }
+        if (connect(sockfd, p->ai_addr, p->ai_addrlen) == -1) { // Fixed the connect() function call
+            close(sockfd);
+            perror("client: connect");
+            continue;
+        }
+        break; // If we get here, we must have connected successfully 
     }
 
-    // Allow the socket address to be reused before TIME_WAIT expires
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &no, sizeof(int)) == -1) {
-      perror("setsockopt"); // Print error message
-      exit(1);              // Exit program with error code
+    if (p == NULL) {
+        fprintf(stderr, "client: failed to connect\n");
+        return 2;
     }
 
-    if (connect(sockfd, p->ai_addr, p->ai_addrlen) ==
-        -1) {                    // Attempt to connect socket to server
-      perror("client: connect"); // Print error message if connection fails
-      close(sockfd);             // Close the socket
-      continue;                  // Continue to the next result
+    inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr), s, sizeof s);
+    printf("client: connecting to %s\n", s);
+    freeaddrinfo(servinfo); // All done with this structure 
+    char cmd[MAXDATASIZE];
+    while (1) {
+        printf("> ");
+        fgets(cmd, MAXDATASIZE, stdin);
+        cmd[strcspn(cmd, "\n")] = 0; // Remove newline character 
+        if (strcmp(cmd, "quit") == 0) {
+            break;
+        } else if (strcmp(cmd, "@dir") == 0) {
+            send(sockfd, cmd, strlen(cmd), 0);
+            // Receive list of files 
+            char buffer[BUFFERSIZE];
+            memset(buffer, 0, BUFFERSIZE);
+            recv(sockfd, buffer, BUFFERSIZE - 1, 0);
+            printf("Files available for download:\n%s\n", buffer);
+        } else if (strncmp(cmd, "@get ", 5) == 0) {
+            send(sockfd, cmd, strlen(cmd), 0); // Send the @get command with filename 
+            // Prepare to receive the file 
+            char file_buffer[BUFFERSIZE];
+            memset(file_buffer, 0, BUFFERSIZE);
+            // Extract the filename from the command 
+            char* filename = cmd + 5; // Skip "@get " to get the filename 
+            FILE *fp = fopen(filename, "wb");
+            if (fp == NULL) {
+                perror("Error opening file");
+                continue;
+            }
+            // Initialize to keep track of total bytes received 
+            int total_bytes_received = 0;
+            // Receive file contents 
+            int bytes_received;
+            while ((bytes_received = recv(sockfd, file_buffer, BUFFERSIZE, 0)) > 0) {
+                total_bytes_received += bytes_received; // Update total bytes received 
+                size_t written = fwrite(file_buffer, 1, bytes_received, fp);
+                if (written < (size_t)bytes_received) {
+                    perror("Error writing file");
+                    break;
+                }
+                // Check if we've received the file completely (optional, based on your protocol) 
+                if (bytes_received < BUFFERSIZE) {
+                    break; // Assume end of file if we received less than BUFFERSIZE 
+                }
+            }
+            if (bytes_received < 0) {
+                perror("recv error");
+            } else {
+                printf("File '%s' downloaded successfully, %d bytes received.\n", filename, total_bytes_received);
+            }
+            fclose(fp);
+        } else if (strcmp(cmd, "help") == 0) {
+            printf("@dir - List files available for download\n@get <filename> - Download a file\nquit - Exit the client\n");
+        } else {
+            printf("Invalid command. Type 'help' for a list of commands.\n");
+        }
     }
-    break; // Break the loop if connection is successful
-  }
-
-  if (p == NULL) {
-    fprintf(stderr,
-            "client: failed to connect\n"); // Print error message if connection
-                                            // to server fails
-    return 2;                               // Return error code
-  }
-
-  // Connection successful
-  inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr), s,
-            sizeof s); // Get the IP address of the server and store it in s
-  printf("client: connecting to %s\n",
-         s); // Print message indicating successful connection
-  freeaddrinfo(
-      servinfo); // Free the memory allocated for the address information
-
-  // server message verification
-  char msg[MAXDATASIZE];
-  char verification[] = "verification";
-  int verification_result = send(sockfd, verification, strlen(verification) - 1,
-                                 0); // send message out
-  if (verification_result == -1) {
-    perror("send");
-    exit(1);
-  }
-  numbytes = recv(sockfd, verification, sizeof(verification) - 1, 0);
-  if (numbytes == -1) {
-    perror("recv");
-    exit(1);
-  }
-
-  // server-client interaction
-  int send_result;
-  while (1) {
-    printf(">");
-    fgets(msg, sizeof(msg), stdin);
-    if (strcmp(msg, "quit")) {
-      send_result = send(sockfd, msg, MAXDATASIZE - 1, 0);
-      if (send_result == -1) {
-        perror("send");
-      }
-      break;
-    } else if (strcmp(msg, "@dir")) {
-      send_result = send(sockfd, msg, MAXDATASIZE - 1, 0);
-      if (send_result == -1) {
-        perror("send");
-      }
-      numbytes = recv(sockfd, msg, sizeof(msg) - 1, 0);
-      if (numbytes == -1) {
-        perror("recv");
-        exit(1);
-      }
-      for (int i = 0; i < BUFFERSIZE; ++i) {
-        printf("%s", msg + 1);
-      }
-      memset(msg, 0, sizeof(msg));
-    } else if (strcmp(msg, "@get:")) {
-      send_result = send(sockfd, msg, MAXDATASIZE - 1, 0);
-      if (send_result == -1) {
-        perror("send");
-      }
-      numbytes = recv(sockfd, msg, sizeof(msg) - 1, 0);
-      if (numbytes == -1) {
-        perror("recv");
-        exit(1);
-      }
-
-      // get and validate filename before receiving contents of file
-      char *buffer[BUFFERSIZE];
-      FILE *fp = fopen(filename, "wb");
-      if (fp == NULL)
-        perror("Error opening file");
-      while ((numbytes = read(sockfd, buffer, sizeof(buffer))) > 0) {
-        fwrite(buffer, 1, numbytes, filename);
-      }
-      memset(msg, 0, sizeof(msg));
-
-    } else if (strcmp(msg, "?") || strcmp(msg, "help")) {
-      printf("\n\t@dir\n\t@get\n\tquit");
-      memset(msg, 0, sizeof(msg));
-    } else {
-      printf("Invalid command\n\n");
-      memset(msg, 0, sizeof(msg));
-    }
-  }
-
-  buf[numbytes] = '\0';                   // Null-terminate the received data
-  printf("client: received '%s'\n", buf); // Print the received data
-  close(sockfd); // Close the socket connection to the server
-  return 0;      // Exit program with success code
+    close(sockfd);
+    return 0;
 }
 
 void *get_in_addr(struct sockaddr *sa) {
-  if (sa->sa_family == AF_INET) { // Check if the socket address family is IPv4
-    return &(((struct sockaddr_in *)sa)->sin_addr); // Return IPv4 address
-  }
-  return &(((struct sockaddr_in6 *)sa)->sin6_addr); // Return IPv6 address
+    if (sa->sa_family == AF_INET) {
+        return &(((struct sockaddr_in*)sa)->sin_addr);
+    }
+    return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }

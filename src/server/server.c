@@ -2,180 +2,140 @@
 #include <dirent.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <sys/wait.h>
+#include <unistd.h>
 
-#define PORT "20000"    // the port users will be connecting to
-#define BUFFERSIZE 1024 // max biffer size ofr sending file contents
-#define BACKLOG 10      // how many pending connections queue will hold
-#define MSG_SIZE                                                               \
-  100 // max size of the message, 100 because the client can only recieve 100
-      // bytes of data
-
-// Server must become a FTP server
-// on command:
-// 	@dir would provide the list of existing files that are eligible for
-// download
-// 	@get would fetch file or files and send to the client that requested
-// them
+#define PORT "20000"
+#define BUFFERSIZE 1024
+#define MAX_FILES 20
+#define BACKLOG 10
 
 void *get_in_addr(struct sockaddr *sa);
-int validate_requested_file(FILE *fp);
 
-int main() {
-  int sockfd, new_fd; // listens on sockfd, new connections on new_fd
-  struct addrinfo hints, *servinfo, *p;
-  struct sockaddr_storage their_addr; // connector's address information
-  socklen_t sin_size;
-  int yes = 1;
-  int no = 0;
-  char s[INET6_ADDRSTRLEN];
-  int rv;
-
-  memset(&hints, 0, sizeof hints); // Initialize hints struct to zero
-
-  // hints.ai_family = AF_UNSPEC; // Specify that the address family is
-  // unspecified, which allows both IPv4 and IPv6
-  hints.ai_family = AF_INET6;
-  hints.ai_socktype = SOCK_STREAM; // Specify socket type as stream (TCP)
-  hints.ai_flags = AI_PASSIVE;     // Use localhost
-
-  rv = getaddrinfo(NULL, PORT, &hints,
-                   &servinfo); // Retrieve address information for the localhost
-                               // and specified port
-  if (rv != 0) {
-    fprintf(stderr, "getaddrinfo: %s\n",
-            gai_strerror(rv)); // Print error if getaddrinfo fails
-    return 1;                  // Exit program with error code
-  }
-
-  // Loop through all the results and bind to the first available
-  for (p = servinfo; p != NULL; p = p->ai_next) {
-    sockfd =
-        socket(p->ai_family, p->ai_socktype, p->ai_protocol); // Create a socket
-
-    if (sockfd == -1) {
-      perror("server: socket"); // Print error messages
-      continue;                 // Continue to the next result
+char *listFilesInDirectory() {
+    DIR *d;
+    struct dirent *dir;
+    char *files = malloc(BUFFERSIZE);
+    if (!files) {
+        perror("Memory allocation failed");
+        exit(EXIT_FAILURE);
     }
-
-    // Set socket option to allow IPv4 and IPv6 on the same socket
-    if (p->ai_family == AF_INET6 &&
-        setsockopt(sockfd, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(yes)) == -1) {
-      perror("setsockopt");
-      close(sockfd);
-      freeaddrinfo(servinfo);
-      return -1;
+    files[0] = '\0'; // Initialize the string to be empty
+    d = opendir("./@dir/"); // Open the current directory
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            if (dir->d_type == DT_REG) { // Check if it's a regular file
+                strcat(files, dir->d_name);
+                strcat(files, "\n");
+            }
+        }
+        closedir(d);
     }
-
-    // Allow the socket address to be reused before TIME_WAIT expires
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
-      perror("setsockopt"); // Print error message
-      exit(1);              // Exit program with error code
-    }
-
-    // Bind the socket to the port
-    if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
-      close(sockfd);          // Close the socket
-      perror("server: bind"); // Print error message
-      continue;               // Continue to the next result
-    }
-    break; // Break the loop if binding is successful
-  }
-
-  freeaddrinfo(
-      servinfo); // Free the memory allocated for the address information
-
-  if (p == NULL) {
-    fprintf(stderr,
-            "server: failed to bind\n"); // Print error message if binding fails
-    exit(1);                             // Exit program with error code
-  }
-
-  // Set up the socket for listening
-  if (listen(sockfd, BACKLOG) == -1) {
-    perror("listen"); // Print error message
-    exit(1);          // Exit program with error code
-  }
-
-  printf("server: waiting for a connection...\n"); // Print message indicating
-                                                   // waiting for connection
-
-  sin_size = sizeof their_addr;
-  new_fd = accept(sockfd, (struct sockaddr *)&their_addr,
-                  &sin_size); // Accept a connection
-
-  // Connection unsuccessful
-  if (new_fd == -1) {
-    perror("accept"); // Print error message
-  }
-
-  // Connection successful
-  inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr),
-            s, sizeof s); // Get the IP address of the client and store it in s
-  printf("Server: got connection from %s\n",
-         s); // Print message indicating successful connection
-
-  close(sockfd); // Done listening for new connections
-                 // message exchange
-
-  char msg[BUFFERSIZE];
-  char *verification = malloc(14 * sizeof(char));
-  int verification_result = recv(sockfd, verification, sizeof(msg), 0);
-  if (verification_result == -1) {
-    perror("recv");
-    exit(1);
-  }
-  verification_result = send(sockfd, verification, sizeof(msg), 0);
-  if (verification_result == -1) {
-    perror("send");
-    exit(1);
-  }
-
-  char buffer[BUFFERSIZE];
-  while (1) {
-    int receive_result = recv(sockfd, buffer, BUFFERSIZE - 1, 0);
-    if (receive_result == -1) {
-      perror("recv");
-      exit(1);
-    }
-
-    if (strcmp(buffer, "quit")) {
-      break;
-    } else if (strcmp(buffer, "@dir")) {
-      memset(msg, 0, sizeof(msg));
-
-    } else if (strcmp(buffer, "@get")) {
-    }
-  }
-
-  close(new_fd); // Done sending message, close connection to client return 0;
+    return files;
 }
 
-// get sockaddr, IPv4 or IPv6:
+int main(void) {
+    int sockfd, new_fd;
+    struct addrinfo hints, *servinfo, *p;
+    struct sockaddr_storage their_addr;
+    socklen_t sin_size;
+    int yes=1;
+    char s[INET6_ADDRSTRLEN];
+    int rv;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET6; // Change this to AF_INET6 to force IPv6
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    if ((rv = getaddrinfo(NULL, PORT, &hints, &servinfo)) != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        return 1;
+    }
+    for(p = servinfo; p != NULL; p = p->ai_next) {
+        if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
+            perror("server: socket");
+            continue;
+        }
+        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
+            perror("setsockopt");
+            exit(1);
+        }
+        if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+            close(sockfd);
+            perror("server: bind");
+            continue;
+        }
+        break;
+    }
+    if (p == NULL)  {
+        fprintf(stderr, "server: failed to bind\n");
+        return 2;
+    }
+    freeaddrinfo(servinfo);
+    if (listen(sockfd, BACKLOG) == -1) {
+        perror("listen");
+        exit(1);
+    }
+    printf("server: waiting for connections...\n");
+    while(1) {  // main accept() loop
+        sin_size = sizeof their_addr;
+        new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+        if (new_fd == -1) {
+            perror("accept");
+            continue;
+        }
+        inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr), s, sizeof s);
+        printf("server: got connection from %s\n", s);
+    
+        char buf[BUFFERSIZE]; // Now handle each client request in a loop
+        int numbytes;
+        while((numbytes = recv(new_fd, buf, BUFFERSIZE-1, 0)) > 0) {
+            buf[numbytes] = '\0';
+            if (strcmp(buf, ".") == 0) {
+                char *fileList = listFilesInDirectory();
+                send(new_fd, fileList, strlen(fileList), 0);
+                free(fileList); // Make sure to free the allocated memory
+            } else if (strcmp(buf, "@dir") == 0) {
+                char *fileList = listFilesInDirectory("../@dir"); // Relative path from src to @dir
+                send(new_fd, fileList, strlen(fileList), 0);
+                free(fileList); // Make sure to free the allocated memory
+            } 
+            else if (strncmp(buf, "@get ", 5) == 0) {
+              // Extract the filename from the command
+              char *filename = buf + 5;
+
+              // Open the file in read-only, binary mode to prevent any modification
+              FILE *fp = fopen(filename, "rb");
+              if (fp == NULL) {
+                  perror("Failed to open file");
+                  continue;
+              }
+
+              // Read file contents and send them to client
+              char file_buffer[BUFFERSIZE];
+              int bytes_read;
+              while ((bytes_read = fread(file_buffer, 1, BUFFERSIZE, fp)) > 0) {
+                  send(new_fd, file_buffer, bytes_read, 0);
+              }
+              fclose(fp); // Close the file after reading
+              printf("File sent: %s\n", filename);
+            } else {
+                // Handle other commands or close connection
+                break; // For now, break the loop if the command is not recognized
+            }
+        }
+        close(new_fd);  // parent doesn't need this
+    }
+    return 0;
+}
+
 void *get_in_addr(struct sockaddr *sa) {
-  if (sa->sa_family == AF_INET) {
-    return &(((struct sockaddr_in *)sa)->sin_addr); // Return IPv4 address
-  }
-  return &(((struct sockaddr_in6 *)sa)->sin6_addr); // Return IPv6 address
-}
-
-bool find_file(char *name) {
-  DIR *dirp = opendir("./@dir/"); // directory pointer
-  bool FOUND = true, NOT_FOUND = false;
-  struct dirent *dp = readdir(dirp);
-
-  while (dp != NULL) {
-    if (strcmp(name, dp->d_name) == 0) {
-      closedir(dirp);
-      return FOUND;
+    if (sa->sa_family == AF_INET) {
+        return &(((struct sockaddr_in*)sa)->sin_addr);
     }
-  }
 
-  return NOT_FOUND;
+    return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }

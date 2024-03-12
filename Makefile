@@ -1,10 +1,14 @@
-all: client server
+CC = gcc
+CFLAGS = -Wall -Wextra
 
-client: 
-	gcc ./src/client/client.c -Wall -o ./bin/client
+all: client server 
 
-server: 
-	gcc ./src/server/server.c -Wall -o ./bin/server
+client: ./src/client/client.c
+	$(CC) $(CFLAGS) $^ -o ./bin/client
+
+server: ./src/server/server.c 
+	$(CC) $(CFLAGS) $^ -o ./bin/server
 
 clean:
-	rm -f ./bin/client ./bin/server
+	rm -f ./bin/client
+	rm -f ./bin/server
